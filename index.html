@@ -14,7 +14,7 @@
 <body class="bg-gradient-to-br from-black to-gray-900 text-white min-h-screen p-4">
     <div class="bg-ap-yellow text-black font-bold text-center py-3 mb-6 rounded-lg shadow-lg">
         ⚙️ HOST PRINCIPAL | ID FIXO: SISTEMA_AP_001
-        <br><span id="statusHost" class="text-red-700">🔄 INICIANDO CONEXÃO GLOBAL...</span>
+        <br><span id="statusHost" class="text-red-700">🔄 INICIANDO...</span>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -37,99 +37,135 @@
         let banco = { historico: [] };
 
         function iniciarHost() {
-            // ⚠️ CONFIGURAÇÃO PARA FUNCIONAR EM QUALQUER INTERNET/REDE
+            // SERVIDORES NOVOS E ESTÁVEIS
             peer = new Peer(ID_FIXO, {
-                host: 'peerjs-server.herokuapp.com', // Servidor GLOBAL livre
+                host: '0.peerjs.com',
                 port: 443,
                 path: '/',
                 secure: true,
                 debug: 0,
                 config: {
-                    iceServers: [ // Rotas de conexão MUNDIAIS (contorna bloqueios)
+                    iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
                         { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+                        { urls: 'stun:stun2.l.google.com:19302' }
                     ]
                 }
             });
 
             peer.on('open', () => {
                 document.getElementById('statusHost').className = 'text-green-700';
-                document.getElementById('statusHost').textContent = '✅ ONLINE E ACESSÍVEL DE QUALQUER REDE';
+                document.getElementById('statusHost').textContent = '✅ ONLINE E FUNCIONANDO';
             });
 
             peer.on('connection', (conn) => {
                 conn.on('data', (dados) => processarDados(conn, dados));
+                
                 conn.on('close', () => {
                     usuarios = usuarios.filter(u => u.conn !== conn);
-                    atualizarTudoParaAdms();
+                    atualizarTodosAdms();
                     atualizarTelaHost();
                 });
+
+                conn.on('error', () => {});
             });
 
-            peer.on('error', () => setTimeout(iniciarHost, 3000));
+            peer.on('error', (erro) => {
+                setTimeout(iniciarHost, 2000);
+            });
         }
 
         function processarDados(conn, dados) {
-            // CADASTRO
+            // CADASTRO DE USUÁRIO
             if(dados.tipo === "cadastrar_usuario") {
-                const novo = { conn, id: dados.idUnico, nome: dados.nomeEscolhido, tipo: dados.tipoUsuario, status: "pendente" };
+                const novo = {
+                    conn: conn,
+                    id: dados.idUnico,
+                    nome: dados.nomeEscolhido,
+                    tipo: dados.tipoUsuario,
+                    status: "pendente",
+                    modo: "",
+                    valor: 0
+                };
                 usuarios.push(novo);
-                atualizarTudoParaAdms();
+                atualizarTodosAdms();
                 atualizarTelaHost();
                 return;
             }
 
-            // MENSAGENS
+            // CLIENTE ENVIA MENSAGEM
             if(dados.tipo === "enviar_mensagem") {
                 const user = usuarios.find(u => u.id === dados.idUsuario);
                 banco.historico.push({ remetente: user?.nome, texto: dados.texto, hora: new Date().toLocaleTimeString(), tipo: 'msg' });
-                atualizarTudoParaAdms();
+                atualizarTodosAdms();
                 atualizarTelaHost();
                 return;
             }
 
-            // PRINT
+            // CLIENTE DEFINE APOSTA
+            if(dados.tipo === "definir_aposta") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                if(user) {
+                    user.modo = dados.modo;
+                    user.valor = dados.valor;
+                    user.status = "aguardando_print";
+                }
+                atualizarTodosAdms();
+                atualizarTelaHost();
+                return;
+            }
+
+            // CLIENTE ENVIA PRINT
             if(dados.tipo === "enviar_print") {
                 const user = usuarios.find(u => u.id === dados.idUsuario);
-                user.status = "analise";
+                if(user) user.status = "analise";
                 banco.historico.push({ remetente: user?.nome, imagem: dados.img, hora: new Date().toLocaleTimeString(), tipo: 'print' });
-                atualizarTudoParaAdms();
+                atualizarTodosAdms();
                 atualizarTelaHost();
                 return;
             }
 
-            // AÇÕES ADM
+            // ADM AÇÕES
             if(dados.tipo === "acao_adm") {
                 const user = usuarios.find(u => u.id === dados.idAlvo);
                 if(user) {
                     user.status = dados.statusNovo;
                     if(dados.texto) user.conn.send({tipo: 'mensagem', texto: dados.texto});
                 }
-                atualizarTudoParaAdms();
+                atualizarTodosAdms();
                 atualizarTelaHost();
                 return;
             }
 
-            // ENVIAR CÓDIGO
+            // ADM ENVIA CÓDIGO
             if(dados.tipo === "enviar_codigo") {
                 const user = usuarios.find(u => u.id === dados.idAlvo);
                 if(user) user.conn.send({tipo: 'codigo_recebido', cod: dados.cod, sen: dados.sen});
                 return;
             }
+
+            // ADM ENVIA MENSAGEM DIRETA
+            if(dados.tipo === "msg_adm_cliente") {
+                const user = usuarios.find(u => u.id === dados.idAlvo);
+                if(user) user.conn.send({tipo: 'mensagem', texto: dados.texto});
+                banco.historico.push({ remetente: "ADM", texto: dados.texto, hora: new Date().toLocaleTimeString(), tipo: 'msg' });
+                atualizarTodosAdms();
+                atualizarTelaHost();
+                return;
+            }
         }
 
-        // ENVIA LISTA ATUALIZADA PARA TODOS ADMS
-        function atualizarTudoParaAdms() {
+        // ✅ FUNÇÃO PRINCIPAL: ENVIA TUDO PARA ADMS SEMPRE
+        function atualizarTodosAdms() {
             const adms = usuarios.filter(u => u.tipo === "adm");
             const dadosEnvio = {
-                tipo: 'atualizacao_completa',
-                lista: usuarios.map(u => ({id:u.id,nome:u.nome,tipo:u.tipo,status:u.status})),
+                tipo: 'atualizacao_total',
+                lista: usuarios.map(u => ({id:u.id,nome:u.nome,tipo:u.tipo,status:u.status,modo:u.modo,valor:u.valor})),
                 historico: banco.historico
             };
-            adms.forEach(adm => adm.conn.send(dadosEnvio));
+            adms.forEach(adm => {
+                if(adm.conn.open) adm.conn.send(dadosEnvio);
+            });
         }
 
         function atualizarTelaHost() {
@@ -137,7 +173,8 @@
             el.innerHTML = usuarios.length ? '' : '<div class="text-gray-500 text-center py-4">Nenhum usuário</div>';
             usuarios.forEach(u => {
                 el.innerHTML += `<div class="p-2 bg-black/40 rounded border-l-2 ${u.tipo==='adm'?'border-red-500':'border-green-500'}">
-                    <b>${u.nome}</b> <span class="text-xs">(${u.tipo})</span> - ${u.status}
+                    <b>${u.nome}</b> <span class="text-xs">(${u.tipo})</span><br>
+                    <span class="text-xs">Status: ${u.status} | ${u.modo} R$${u.valor}</span>
                 </div>`;
             });
 
