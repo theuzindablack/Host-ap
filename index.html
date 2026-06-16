@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HOST PRINCIPAL | ID: SISTEMA_AP_001</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { ap: { primary: '#165DFF', dark: '#0A0E27', gray: '#1A1F38', orange: '#FF7D00', green: '#2ECC71', red: '#e74c3c', yellow: '#FACC15', vip: '#9333EA' } } } } }
+    </script>
+    <style>.cargo-badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: bold; }</style>
+</head>
+<body class="bg-gradient-to-br from-black to-gray-900 text-white min-h-screen p-4">
+    <div class="bg-ap-yellow text-black font-bold text-center py-3 mb-6 rounded-lg shadow-lg">
+        ⚙️ HOST PRINCIPAL | <span class="text-red-700">ID: SISTEMA_AP_001</span>  
+        STATUS: <span id="statusHost" class="text-ap-yellow">INICIANDO...</span>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="bg-ap-gray rounded-xl border-2 border-ap-yellow/50 p-4 shadow-xl">
+            <h2 class="text-xl font-bold text-ap-yellow mb-4">🔌 CONEXÕES ATIVAS</h2>
+            <div class="space-y-2 text-sm" id="listaUsuarios"><div class="text-gray-500 text-center py-2">Nenhum usuário conectado</div></div>
+        </div>
+    </div>
+
+    <div class="mt-6 bg-ap-gray rounded-xl border-2 border-ap-vip/50 p-4 shadow-xl">
+        <h2 class="text-lg font-bold text-ap-vip mb-4">💬 HISTÓRICO GERAL</h2>
+        <div id="historicoChatGeral" class="h-[250px] overflow-y-auto space-y-2 text-sm bg-black/60 p-3 rounded-lg"></div>
+    </div>
+
+    <script>
+        const ID_FIXO = "SISTEMA_AP_001";
+        let peer;
+        let usuarios = [];
+
+        // BANCO DE DADOS
+        let bancoDados = {
+            historicoMensagens: []
+        };
+
+        function salvarBanco() {
+            localStorage.setItem('bancoDadosAP', JSON.stringify(bancoDados));
+            enviarDadosParaTodosADMs(); // ENVIA TUDO PROS ADMS SEMPRE
+        }
+
+        function iniciarHost() {
+            peer = new Peer(ID_FIXO, { host: '0.peerjs.com', port: 443, path: '/', secure: true });
+
+            peer.on('open', () => {
+                document.getElementById('statusHost').className = 'text-ap-green';
+                document.getElementById('statusHost').textContent = `ONLINE ✅`;
+            });
+
+            peer.on('connection', (conn) => {
+                conn.on('data', (dados) => processarDados(conn, dados));
+
+                conn.on('close', () => {
+                    usuarios = usuarios.filter(u => u.conn !== conn);
+                    atualizarTelaHost();
+                    enviarDadosParaTodosADMs(); // AVISA ADM QUE SAIU
+                });
+            });
+
+            peer.on('error', (erro) => setTimeout(iniciarHost, 3000));
+        }
+
+        function processarDados(conn, dados) {
+            // CADASTRO DE USUÁRIO
+            if(dados.tipo === "cadastrar_usuario") {
+                const novo = {
+                    conn: conn,
+                    id: dados.idUnico,
+                    nome: dados.nomeEscolhido,
+                    tipo: dados.tipoUsuario,
+                    statusPagamento: "pendente",
+                    modoJogo: "",
+                    valorAposta: 0
+                };
+                usuarios.push(novo);
+                atualizarTelaHost();
+
+                // SE FOR ADM, ENVIA TUDO AO ENTRAR
+                if(novo.tipo === "adm") {
+                    conn.send({
+                        tipo: "dados_atualizados",
+                        listaUsuarios: usuarios.map(u => ({id:u.id,nome:u.nome,tipo:u.tipo,statusPagamento:u.statusPagamento,modoJogo:u.modoJogo,valorAposta:u.valorAposta})),
+                        historico: bancoDados.historicoMensagens
+                    });
+                }
+                enviarDadosParaTodosADMs(); // AVISA TODOS ADMS NOVO USUÁRIO
+                return;
+            }
+
+            // CLIENTE ENVIA MENSAGEM
+            if(dados.tipo === "enviar_mensagem") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                bancoDados.historicoMensagens.push({remetente:user?.nome||"Cliente", conteudo:dados.texto, hora:new Date().toLocaleTimeString(), tipo:"texto"});
+                salvarBanco();
+                return;
+            }
+
+            // CLIENTE DEFINE APOSTA
+            if(dados.tipo === "definir_aposta") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                if(user) { user.modoJogo = dados.modo; user.valorAposta = dados.valor; user.statusPagamento = "aguardando_print"; }
+                salvarBanco();
+                return;
+            }
+
+            // CLIENTE ENVIA PRINT
+            if(dados.tipo === "enviar_print") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                bancoDados.historicoMensagens.push({remetente:user?.nome||"Cliente", conteudo:"Enviou print de pagamento", imagem:dados.imagem, hora:new Date().toLocaleTimeString(), tipo:"print"});
+                if(user) user.statusPagamento = "analise";
+                salvarBanco();
+                return;
+            }
+
+            // ADM RESPOSTAS
+            if(dados.tipo === "adm_aprovar_pagamento") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                if(user) { user.statusPagamento = "pago"; user.conn.send({tipo:"pagamento_aprovado"}); }
+                salvarBanco();
+                return;
+            }
+            if(dados.tipo === "adm_rejeitar_pagamento") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                if(user) { user.statusPagamento = "recusado"; user.conn.send({tipo:"pagamento_recusado"}); }
+                salvarBanco();
+                return;
+            }
+            if(dados.tipo === "enviar_codigo") {
+                const user = usuarios.find(u => u.id === dados.idUsuario);
+                if(user) user.conn.send({tipo:"receber_codigo", codigo:dados.codigo, senha:dados.senha});
+                return;
+            }
+            if(dados.tipo === "adm_mensagem_cliente") {
+                const user = usuarios.find(u => u.id === dados.idDestinatario);
+                if(user) user.conn.send({tipo:"mensagem", texto:dados.texto});
+                bancoDados.historicoMensagens.push({remetente:"ADM", conteudo:dados.texto, hora:new Date().toLocaleTimeString(), tipo:"texto"});
+                salvarBanco();
+                return;
+            }
+        }
+
+        // ✅ FUNÇÃO PRINCIPAL: ENVIA LISTA DE CLIENTES E HISTÓRICO PARA TODOS OS ADMS
+        function enviarDadosParaTodosADMs() {
+            const adms = usuarios.filter(u => u.tipo === "adm");
+            const dadosParaEnviar = {
+                tipo: "dados_atualizados",
+                listaUsuarios: usuarios.map(u => ({id:u.id,nome:u.nome,tipo:u.tipo,statusPagamento:u.statusPagamento,modoJogo:u.modoJogo,valorAposta:u.valorAposta})),
+                historico: bancoDados.historicoMensagens
+            };
+            adms.forEach(adm => { if(adm.conn.open) adm.conn.send(dadosParaEnviar); });
+            atualizarTelaHost();
+        }
+
+        function atualizarTelaHost() {
+            const el = document.getElementById('listaUsuarios');
+            el.innerHTML = usuarios.length === 0 ? `<div class="text-gray-500 text-center py-2">Nenhum usuário conectado</div>` : "";
+            usuarios.forEach(u => {
+                el.innerHTML += `<div class="p-2 bg-black/40 rounded border-l-2 ${u.tipo==='adm'?'border-red-500':'border-green-500'}"><b>${u.nome}</b> <span class="text-xs">(${u.tipo})</span></div>`;
+            });
+
+            const elHist = document.getElementById('historicoChatGeral');
+            elHist.innerHTML = "";
+            bancoDados.historicoMensagens.forEach(m => {
+                elHist.innerHTML += `<div class="text-xs py-1">[${m.hora}] ${m.remetente}: ${m.conteudo}</div>`;
+            });
+            elHist.scrollTop = elHist.scrollHeight;
+        }
+
+        iniciarHost();
+    </script>
+</body>
+</html>
